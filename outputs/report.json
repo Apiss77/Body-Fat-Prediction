@@ -1,0 +1,458 @@
+{
+  "n_awal": 252,
+  "imputer_aktif": false,
+  "metode_outlier": "Tidak dihapus (untuk menghindari filtrasi global sebelum CV)",
+  "n_outlier_dihapus_train": 0,
+  "n_train": 201,
+  "n_test": 51,
+  "n_setelah_clean": 252,
+  "n_outlier_dihapus": 0,
+  "k_results": [
+    {
+      "k": 3,
+      "MAE": 3.7514,
+      "MSE": 22.8242,
+      "RMSE": 4.7775,
+      "R2": 0.5093,
+      "CV_R2_mean": 0.7152,
+      "CV_R2_std": 0.0385
+    },
+    {
+      "k": 5,
+      "MAE": 3.3989,
+      "MSE": 18.0962,
+      "RMSE": 4.254,
+      "R2": 0.611,
+      "CV_R2_mean": 0.7067,
+      "CV_R2_std": 0.0352
+    },
+    {
+      "k": 7,
+      "MAE": 3.3661,
+      "MSE": 16.8483,
+      "RMSE": 4.1047,
+      "R2": 0.6378,
+      "CV_R2_mean": 0.7091,
+      "CV_R2_std": 0.0271
+    },
+    {
+      "k": 10,
+      "MAE": 3.2488,
+      "MSE": 16.2369,
+      "RMSE": 4.0295,
+      "R2": 0.651,
+      "CV_R2_mean": 0.7093,
+      "CV_R2_std": 0.0464
+    }
+  ],
+  "best_k": 7,
+  "selection_method": "fixed_k_for_streamlit",
+  "linreg_nested_cv_R2_mean": 0.71277838778371,
+  "linreg_nested_cv_R2_std": 0.02965190031488536,
+  "nested_cv_selected_k_by_fold": [
+    3,
+    7,
+    3,
+    5,
+    7
+  ],
+  "baseline": {
+    "MAE": 3.3293,
+    "MSE": 17.98,
+    "RMSE": 4.2403,
+    "R2": 0.6135,
+    "CV_R2_mean": 0.7034,
+    "CV_R2_std": 0.0524
+  },
+  "selected_features": [
+    "Weight",
+    "Neck",
+    "Chest",
+    "Abdomen",
+    "Hip",
+    "Thigh",
+    "Biceps"
+  ],
+  "all_features": [
+    "Age",
+    "Weight",
+    "Height",
+    "Neck",
+    "Chest",
+    "Abdomen",
+    "Hip",
+    "Thigh",
+    "Knee",
+    "Ankle",
+    "Biceps",
+    "Forearm",
+    "Wrist"
+  ],
+  "f_scores": [
+    {
+      "fitur": "Abdomen",
+      "F_score": 445.81
+    },
+    {
+      "fitur": "Chest",
+      "F_score": 204.79
+    },
+    {
+      "fitur": "Hip",
+      "F_score": 146.21
+    },
+    {
+      "fitur": "Weight",
+      "F_score": 136.63
+    },
+    {
+      "fitur": "Thigh",
+      "F_score": 90.98
+    },
+    {
+      "fitur": "Neck",
+      "F_score": 72.65
+    },
+    {
+      "fitur": "Biceps",
+      "F_score": 72.0
+    },
+    {
+      "fitur": "Knee",
+      "F_score": 68.04
+    },
+    {
+      "fitur": "Forearm",
+      "F_score": 33.17
+    },
+    {
+      "fitur": "Wrist",
+      "F_score": 31.38
+    },
+    {
+      "fitur": "Ankle",
+      "F_score": 20.65
+    },
+    {
+      "fitur": "Age",
+      "F_score": 18.37
+    },
+    {
+      "fitur": "Height",
+      "F_score": 1.75
+    }
+  ],
+  "korelasi_tinggi_fitur_terpilih": [
+    {
+      "fitur_1": "Weight",
+      "fitur_2": "Neck",
+      "korelasi": 0.8035
+    },
+    {
+      "fitur_1": "Weight",
+      "fitur_2": "Chest",
+      "korelasi": 0.8953
+    },
+    {
+      "fitur_1": "Weight",
+      "fitur_2": "Abdomen",
+      "korelasi": 0.8819
+    },
+    {
+      "fitur_1": "Weight",
+      "fitur_2": "Hip",
+      "korelasi": 0.9341
+    },
+    {
+      "fitur_1": "Weight",
+      "fitur_2": "Thigh",
+      "korelasi": 0.8541
+    },
+    {
+      "fitur_1": "Chest",
+      "fitur_2": "Abdomen",
+      "korelasi": 0.917
+    },
+    {
+      "fitur_1": "Chest",
+      "fitur_2": "Hip",
+      "korelasi": 0.8319
+    },
+    {
+      "fitur_1": "Abdomen",
+      "fitur_2": "Hip",
+      "korelasi": 0.8675
+    },
+    {
+      "fitur_1": "Hip",
+      "fitur_2": "Thigh",
+      "korelasi": 0.8828
+    }
+  ],
+  "vif_fitur_terpilih": [
+    {
+      "fitur": "Weight",
+      "VIF": 16.5317
+    },
+    {
+      "fitur": "Neck",
+      "VIF": 3.3136
+    },
+    {
+      "fitur": "Chest",
+      "VIF": 9.1243
+    },
+    {
+      "fitur": "Abdomen",
+      "VIF": 8.1975
+    },
+    {
+      "fitur": "Hip",
+      "VIF": 12.1228
+    },
+    {
+      "fitur": "Thigh",
+      "VIF": 5.4035
+    },
+    {
+      "fitur": "Biceps",
+      "VIF": 3.0241
+    }
+  ],
+  "ridge_alpha_terbaik": 1.0,
+  "rf_best_params": {
+    "max_depth": 5,
+    "min_samples_leaf": 1,
+    "n_estimators": 200
+  },
+  "model_comparison": [
+    {
+      "model": "Linear Regression",
+      "MAE": 3.3661,
+      "MSE": 16.8483,
+      "RMSE": 4.1047,
+      "R2": 0.6378,
+      "CV_R2_mean": 0.71277838778371,
+      "CV_R2_std": 0.02965190031488536
+    },
+    {
+      "model": "Ridge Regression",
+      "MAE": 3.3605,
+      "MSE": 16.8097,
+      "RMSE": 4.1,
+      "R2": 0.6386,
+      "CV_R2_mean": 0.7145168157884294,
+      "CV_R2_std": 0.02989014316065692,
+      "alpha": 1.0
+    },
+    {
+      "model": "Random Forest",
+      "MAE": 3.2166,
+      "MSE": 15.6322,
+      "RMSE": 3.9538,
+      "R2": 0.664,
+      "CV_R2_mean": 0.6573750158985873,
+      "CV_R2_std": 0.023303681306792442,
+      "params": {
+        "max_depth": 5,
+        "min_samples_leaf": 1,
+        "n_estimators": 200
+      }
+    }
+  ],
+  "final_model": {
+    "model": "Linear Regression",
+    "MAE": 3.3661,
+    "MSE": 16.8483,
+    "RMSE": 4.1047,
+    "R2": 0.6378,
+    "CV_R2_mean": 0.71277838778371,
+    "CV_R2_std": 0.02965190031488536
+  },
+  "model_terbaik_cv": "Ridge Regression",
+  "artifact_id": "7074b673fd504f689694c921a828cee1",
+  "shap_importance": {
+    "Linear Regression": [
+      {
+        "fitur": "Abdomen",
+        "mean_abs_shap": 7.7427
+      },
+      {
+        "fitur": "Weight",
+        "mean_abs_shap": 2.8579
+      },
+      {
+        "fitur": "Biceps",
+        "mean_abs_shap": 0.8122
+      },
+      {
+        "fitur": "Neck",
+        "mean_abs_shap": 0.783
+      },
+      {
+        "fitur": "Hip",
+        "mean_abs_shap": 0.7237
+      },
+      {
+        "fitur": "Thigh",
+        "mean_abs_shap": 0.6218
+      },
+      {
+        "fitur": "Chest",
+        "mean_abs_shap": 0.3783
+      }
+    ],
+    "Ridge Regression": [
+      {
+        "fitur": "Abdomen",
+        "mean_abs_shap": 7.4234
+      },
+      {
+        "fitur": "Weight",
+        "mean_abs_shap": 2.6755
+      },
+      {
+        "fitur": "Neck",
+        "mean_abs_shap": 0.7821
+      },
+      {
+        "fitur": "Biceps",
+        "mean_abs_shap": 0.7564
+      },
+      {
+        "fitur": "Hip",
+        "mean_abs_shap": 0.6436
+      },
+      {
+        "fitur": "Thigh",
+        "mean_abs_shap": 0.5769
+      },
+      {
+        "fitur": "Chest",
+        "mean_abs_shap": 0.2364
+      }
+    ],
+    "Random Forest": [
+      {
+        "fitur": "Abdomen",
+        "mean_abs_shap": 5.2406
+      },
+      {
+        "fitur": "Weight",
+        "mean_abs_shap": 0.5351
+      },
+      {
+        "fitur": "Neck",
+        "mean_abs_shap": 0.398
+      },
+      {
+        "fitur": "Hip",
+        "mean_abs_shap": 0.3749
+      },
+      {
+        "fitur": "Chest",
+        "mean_abs_shap": 0.2604
+      },
+      {
+        "fitur": "Thigh",
+        "mean_abs_shap": 0.1799
+      },
+      {
+        "fitur": "Biceps",
+        "mean_abs_shap": 0.1732
+      }
+    ]
+  },
+  "koefisien_linreg": [
+    {
+      "fitur": "Weight",
+      "koef": -3.6538
+    },
+    {
+      "fitur": "Neck",
+      "koef": -0.9745
+    },
+    {
+      "fitur": "Chest",
+      "koef": -0.5766
+    },
+    {
+      "fitur": "Abdomen",
+      "koef": 11.2835
+    },
+    {
+      "fitur": "Hip",
+      "koef": -0.9976
+    },
+    {
+      "fitur": "Thigh",
+      "koef": 0.8271
+    },
+    {
+      "fitur": "Biceps",
+      "koef": 0.9599
+    }
+  ],
+  "intercept_linreg": 19.4358,
+  "koefisien_ridge": [
+    {
+      "fitur": "Weight",
+      "koef": -3.4206
+    },
+    {
+      "fitur": "Neck",
+      "koef": -0.9734
+    },
+    {
+      "fitur": "Chest",
+      "koef": -0.3603
+    },
+    {
+      "fitur": "Abdomen",
+      "koef": 10.8181
+    },
+    {
+      "fitur": "Hip",
+      "koef": -0.8871
+    },
+    {
+      "fitur": "Thigh",
+      "koef": 0.7674
+    },
+    {
+      "fitur": "Biceps",
+      "koef": 0.8939
+    }
+  ],
+  "intercept_ridge": 19.4358,
+  "feature_importance_rf": [
+    {
+      "fitur": "Abdomen",
+      "importance": 0.8109
+    },
+    {
+      "fitur": "Weight",
+      "importance": 0.0407
+    },
+    {
+      "fitur": "Chest",
+      "importance": 0.0378
+    },
+    {
+      "fitur": "Neck",
+      "importance": 0.033
+    },
+    {
+      "fitur": "Hip",
+      "importance": 0.0289
+    },
+    {
+      "fitur": "Biceps",
+      "importance": 0.0246
+    },
+    {
+      "fitur": "Thigh",
+      "importance": 0.024
+    }
+  ]
+}
