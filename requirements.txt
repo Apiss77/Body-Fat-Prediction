@@ -6,4 +6,4 @@ numpy==2.5.2
 matplotlib==3.11.1
 shap==0.52.0
 joblib==1.6.0
-scipy==1.15.3
+scipy==1.18.1
