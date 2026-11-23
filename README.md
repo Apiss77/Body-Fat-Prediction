@@ -1,98 +1,113 @@
 # Prediksi Persentase Body Fat
-### Regresi Linear + SelectKBest + Interpretasi SHAP
-Hafiz Akbar Habibie Wijaya · 23.53.028035 · Ilmu Komputer UMPR · 2026
+
+Model prediksi persentase lemak tubuh menggunakan regresi linear dengan SelectKBest dan interpretasi SHAP pada data antropometri.
+
+**Hafiz Akbar Habibie Wijaya · 23.53.028035 · S1 Ilmu Komputer · Universitas Muhammadiyah Palangkaraya · 2026**
 
 ---
 
-## Isi Folder
-```
-skripsi-bodyfat/
-├── train_model.py     <- skrip latih model dan evaluasi
-├── app.py             <- aplikasi Streamlit (prediksi + SHAP)
-├── bodyfat.csv        <- dataset (252 sampel, 15 kolom)
-├── requirements.txt   <- daftar library
-└── README.md          <- file ini
-```
-Folder `outputs/` akan dibuat OTOMATIS setelah menjalankan `train_model.py`.
-`notebook_bodyfat.ipynb` adalah catatan analisis terdahulu; untuk hasil yang konsisten dengan perbaikan metodologi terbaru, gunakan `train_model.py` sebagai sumber training utama.
+## Alur Metodologi
+
+1. **Data**: 252 sampel pria, 15 variabel, target `BodyFat`. Kolom `Density` dihapus (deterministik).
+2. **Preprocessing**: tidak ada penghapusan outlier (tanpa IQR, tanpa penyaringan kuantil). Imputasi median dan StandardScaler dijalankan di dalam pipeline.
+3. **Split data**: 80% latih (201 sampel), 20% uji (51 sampel), `random_state=42`.
+4. **Seleksi fitur**: `SelectKBest(f_regression)`, kandidat k ∈ {3, 5, 7, 10}. **k dipilih otomatis dari rata-rata R² CV 5-lipatan** (hasilnya k = 3: Chest, Abdomen, Hip).
+5. **Tiga model** dievaluasi pada fitur terpilih yang sama:
+   - **Linear Regression** (model utama)
+   - **Ridge Regression** (alpha dipilih via GridSearchCV, 25 kandidat log-scale)
+   - **Random Forest Regressor** (grid: n\_estimators×max\_depth×min\_samples\_leaf = 18 kombinasi)
+6. **Intersep dan CI 95%** koefisien Linear Regression dihitung secara OLS pada data latih (satuan asli, dof = 197, t kritis ≈ 1.9721).
+7. **Interpretasi SHAP**: LinearExplainer untuk Linear Regression dan Ridge; TreeExplainer untuk Random Forest.
+8. **Aplikasi Streamlit**: tiga input (lingkar dada, perut, pinggul dalam cm), tabel CI 95%, perbandingan model, dan beeswarm SHAP global.
 
 ---
 
-## Cara Menjalankan di Visual Studio Code
+## Hasil Utama
 
-Gunakan **Python 3.12.10** (disarankan) dan versi pustaka yang tercantum di `requirements.txt`.
+| Model             | MAE    | RMSE   | R² uji | R² CV ± Std       |
+|-------------------|--------|--------|--------|-------------------|
+| Linear Regression | 3.7514 | 4.7775 | 0.5093 | 0.7152 ± 0.0385   |
+| Ridge Regression  | 3.7514 | 4.7774 | 0.5094 | 0.7152 ± 0.0385   |
+| Random Forest     | 3.3455 | 4.1078 | 0.6373 | 0.6534 ± 0.0703   |
 
-### 1. Buka folder
-VS Code → **File → Open Folder** → pilih folder `skripsi-bodyfat`.
+**Fitur terpilih (k = 3):** Chest, Abdomen, Hip  
+**Baseline (13 fitur):** R² uji = 0.6135, R² CV = 0.7034 ± 0.0524
 
-### 2. Buka terminal
-Menu **Terminal → New Terminal** (atau tekan Ctrl + `).
+### Intersep dan CI 95% (Linear Regression, satuan asli)
 
-### 3. Install library (sekali saja)
+| Parameter | β        | SE     | CI bawah | CI atas  | β terstandarisasi |
+|-----------|----------|--------|----------|----------|-------------------|
+| Intersep  | −19.4779 | 5.9315 | −31.1753 | −7.7805  | 19.4358           |
+| Chest     | −0.2654  | 0.0980 | −0.4587  | −0.0722  | −2.2515           |
+| Abdomen   |  1.0460  | 0.0871 |  0.8742  |  1.2177  | 11.1327           |
+| Hip       | −0.3132  | 0.0976 | −0.5057  | −0.1207  | −2.1384           |
+
+---
+
+## Cara Pakai
+
+### 1. Instal dependensi
 ```bash
 pip install -r requirements.txt
 ```
-> Kalau `pip` tidak dikenal, coba `pip3` atau `python -m pip install -r requirements.txt`
 
-### 4. Latih model (WAJIB dijalankan duluan)
+### 2. Latih model (hasilkan artefak di `outputs/`)
 ```bash
 python train_model.py
 ```
-Berhasil jika muncul output `[TAHAP 1] ... ===== SELESAI =====` dan
-folder `outputs/` terisi (model + grafik).
 
-### 5. Jalankan aplikasi
+### 3. Jalankan aplikasi Streamlit
 ```bash
 streamlit run app.py
 ```
-Di formulir, berat badan dimasukkan dalam kg dan lingkar perut dalam cm. Aplikasi mengonversi berat ke pound secara internal karena model dilatih dengan satuan dataset tersebut.
-Browser terbuka otomatis di http://localhost:8501
-Masukkan data antropometri → klik **Prediksi**.
 
-Hentikan aplikasi: klik di terminal lalu tekan **Ctrl + C**.
+### 4. Verifikasi angka skripsi
+```bash
+python verify_thesis_numbers.py
+```
 
----
-
-## Jika Ada Error
-
-| Error | Solusi |
-|-------|--------|
-| `FileNotFoundError: bodyfat.csv` | Pastikan terminal berada di dalam folder `skripsi-bodyfat` |
-| `ModuleNotFoundError` | Ulangi langkah 3 |
-| `streamlit: command not found` | Pakai `python -m streamlit run app.py` |
-| App: artefak model tidak cocok atau tidak lengkap | Jalankan ulang `python train_model.py` untuk membuat seluruh model dan laporan |
+### 5. Analisis tambahan (opsional, butuh statsmodels)
+```bash
+python analisis_tambahan.py bodyfat.csv
+```
 
 ---
 
-## Metodologi dan hasil
-- `Density` dihapus karena berhubungan deterministik dengan target dan dapat menyebabkan kebocoran target.
-- Data dibagi menjadi train dan test. Baris outlier tidak dihapus agar keputusan filtrasi tidak menggunakan informasi lintas-fold pada evaluasi CV.
-- Imputasi, scaling, dan seleksi fitur dilakukan di dalam pipeline. Pada evaluasi CV Ridge dan Random Forest, preprocessing dan seleksi fitur di-fit ulang pada setiap fold.
-- Skor CV utama dihitung dengan nested cross-validation: inner CV memilih parameter, outer CV mengukur proses pemilihan. Evaluasi test tetap merupakan estimasi terpisah pada split ini.
-- Aplikasi Streamlit memakai jumlah fitur tetap `K=7`. Skrip tetap menghitung kandidat `[3, 5, 7, 10]` sebagai analisis pembanding; model dan artefak final untuk aplikasi dilatih dengan K=7.
-- Laporan dan model di `outputs/` hanya valid setelah dibuat ulang dengan `python train_model.py`; jalankan ulang setelah memperbarui kode. Artefak lama mungkin tidak cocok dengan aplikasi.
+## Struktur Folder
+
+```
+├── bodyfat.csv               # Dataset
+├── train_model.py            # Skrip pelatihan model
+├── app.py                    # Aplikasi Streamlit
+├── requirements.txt          # Dependensi
+├── verify_thesis_numbers.py  # Skrip verifikasi angka skripsi
+├── analisis_tambahan.py      # Analisis tambahan (CI, VIF 13 fitur, CV berulang)
+└── outputs/
+    ├── model_linreg.pkl
+    ├── model_ridge.pkl
+    ├── model_rf.pkl
+    ├── preprocessor.pkl
+    ├── meta.pkl
+    ├── report.json
+    └── *.png                 # Grafik evaluasi dan SHAP
+```
+
+---
+
+## Dependensi Utama
+
+- Python 3.12.10
+- scikit-learn 1.9.0
+- pandas 3.0.5
+- numpy 2.5.2
+- shap 0.52.0
+- streamlit 1.62.0
+- matplotlib 3.11.1
+- scipy 1.15.3
+- joblib 1.6.0
 
 ---
 
 ## Lisensi
-MIT License
 
-Copyright (c) 2026 Hafiz Akbar Habibie Wijaya
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+MIT License — lihat [LICENSE](LICENSE).
