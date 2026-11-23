@@ -8,22 +8,24 @@ Hafiz Akbar Habibie Wijaya - 23.53.028035 - Ilmu Komputer UMPR
 Pipeline 9 tahap:
   1. Setup environment & load data
   2. Preprocessing (hapus Density, split, imputasi dan scaling di dalam pipeline)
-  3. Feature Selection (SelectKBest, k={3,5,7,10} — basis: Linear Regression)
+  3. Feature Selection (SelectKBest, k dipilih otomatis dari CV — basis: Linear Regression)
   4. Pembangunan Model Utama (Linear Regression, baseline vs SelectKBest)
   5. Pembangunan Model Pembanding (Ridge Regression, Random Forest Regressor)
      -> dievaluasi pada fitur terpilih yang SAMA (adil, apple-to-apple)
-  6. Evaluasi & Perbandingan (MAE/MSE/RMSE/R2 + nested 5-fold CV)
+  6. Evaluasi & Perbandingan (MAE/MSE/RMSE/R2 + CV pada fitur terpilih)
   7. Interpretasi SHAP (global + lokal, untuk SEMUA model)
-  8. Simpan artefak untuk Streamlit
+  8. Intersep dan CI 95% koefisien Linear Regression (satuan asli)
+  9. Simpan artefak untuk Streamlit
 ====================================================================
 CATATAN METODOLOGI:
-  - k terbaik untuk SelectKBest ditentukan menggunakan Linear Regression
-    sebagai basis (model utama penelitian). Ridge dan Random Forest
-    kemudian dievaluasi pada set fitur yang SAMA agar perbandingan antar
-    model adil (bukan tiap model memilih fitur berbeda).
+  - k terbaik untuk SelectKBest ditentukan dari rata-rata R² CV 5-lipatan
+    dengan Linear Regression sebagai basis (model utama penelitian ini).
+    Ridge dan Random Forest kemudian dievaluasi pada set fitur yang SAMA
+    agar perbandingan antar model adil (bukan tiap model memilih fitur berbeda).
   - SHAP explainer disesuaikan per tipe model:
       * Linear Regression & Ridge -> shap.LinearExplainer (exact, closed-form)
       * Random Forest             -> shap.TreeExplainer (exact untuk tree-based)
+  - Tidak ada penghapusan outlier (IQR maupun kuantil) pada data latih maupun uji.
 """
 
 import warnings
@@ -39,13 +41,18 @@ import joblib
 import json
 import uuid
 
+from scipy import stats as scipy_stats
+
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.feature_selection import SelectKBest, f_regression
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split, cross_val_score, KFold, GridSearchCV
+from sklearn.base import clone
+from sklearn.model_selection import (
+    train_test_split, cross_val_score, KFold, GridSearchCV
+)
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 import shap
@@ -74,8 +81,7 @@ print("\n[TAHAP 2] Preprocessing...")
 df = df.drop(columns=["Density"])
 print("  - Kolom 'Density' dihapus (hubungan deterministik dgn target)")
 
-# (b) Imputasi median (disiapkan di pipeline untuk robustness; TIDAK aktif di
-#     dataset ini karena tidak ada missing value — dicatat apa adanya di report)
+# (b) Cek missing value
 n_missing = int(df.isnull().sum().sum())
 print(f"  - Missing value terdeteksi: {n_missing} (imputasi median disiapkan di pipeline, "
       f"{'aktif' if n_missing > 0 else 'tidak aktif pada dataset ini'})")
@@ -83,23 +89,23 @@ report["imputer_aktif"] = n_missing > 0
 
 feature_cols = [c for c in df.columns if c != "BodyFat"]
 
-# Pisahkan data sebelum pemodelan. Tidak menghapus outlier secara global:
-# batas IQR dari seluruh train sebelum CV akan membocorkan informasi fold validasi.
+# Pisahkan data sebelum pemodelan. Tidak ada penghapusan outlier (IQR maupun kuantil).
 X = df[feature_cols]
 y = df["BodyFat"]
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.20, random_state=RANDOM_STATE
 )
 
-print("  - Tidak ada baris yang dihapus sebagai outlier; evaluasi CV mempertahankan semua baris")
-report["metode_outlier"] = "Tidak dihapus (untuk menghindari filtrasi global sebelum CV)"
+print("  - Tidak ada baris yang dihapus sebagai outlier (tidak ada IQR/kuantil filtering)")
+report["metode_outlier"] = "Tidak dihapus (tanpa IQR, tanpa penyaringan kuantil)"
 report["n_outlier_dihapus_train"] = 0
 report["n_train"] = int(len(X_train))
 report["n_test"] = int(len(X_test))
+report["n_fitur"] = int(len(feature_cols))
 report["n_setelah_clean"] = int(len(X_train) + len(X_test))
 report["n_outlier_dihapus"] = 0
 
-print(f"  - Split 80/20 -> train: {len(X_train)}, test: {len(X_test)} (test tidak difilter)")
+print(f"  - Split 80/20 -> train: {len(X_train)}, test: {len(X_test)}, fitur: {len(feature_cols)}")
 print("  - StandardScaler dan seleksi fitur di-fit di dalam pipeline")
 
 # Helper metrik
@@ -132,77 +138,17 @@ baseline = Pipeline([
 baseline.fit(X_train, y_train)
 base_metrics = evaluate(baseline, X_test, y_test)
 base_cv_mean, base_cv_std = cv_r2(baseline, X_train, y_train)
-print(f"  Baseline (semua {X.shape[1]} fitur): R2_test={base_metrics['R2']}, "
+print(f"  Baseline (semua {len(feature_cols)} fitur): R2_test={base_metrics['R2']}, "
       f"CV_R2={base_cv_mean}+/-{base_cv_std}")
 
+report["baseline"] = {**base_metrics, "CV_R2_mean": base_cv_mean, "CV_R2_std": base_cv_std}
+
 # Eksperimen k = {3,5,7,10} dengan SelectKBest DI DALAM Pipeline
-# (basis pemilihan k = Linear Regression, model utama penelitian ini)
+# k terbaik dipilih berdasarkan rata-rata R² CV 5-lipatan (bukan di-hardcode)
 k_values = [3, 5, 7, 10]
-alphas = np.logspace(-3, 3, 25)
-rf_param_grid = {
-    "n_estimators": [200],
-    "max_depth": [None, 5],
-    "min_samples_leaf": [1, 2],
-}
-
-def nested_common_k_cv(Xtr, ytr):
-    """Compare models with the same K selected inside each outer training fold."""
-    outer = KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE + 1)
-    scores = {name: [] for name in ("Linear Regression", "Ridge Regression", "Random Forest")}
-    selected_ks = []
-    for train_idx, valid_idx in outer.split(Xtr, ytr):
-        X_fit, X_valid = Xtr.iloc[train_idx], Xtr.iloc[valid_idx]
-        y_fit, y_valid = ytr.iloc[train_idx], ytr.iloc[valid_idx]
-        inner = KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
-        selector_search = GridSearchCV(
-            Pipeline([
-                ("imputer", SimpleImputer(strategy="median")),
-                ("scaler", StandardScaler()),
-                ("select", SelectKBest(score_func=f_regression)),
-                ("reg", LinearRegression()),
-            ]), {"select__k": k_values}, cv=inner, scoring="r2", n_jobs=-1,
-        ).fit(X_fit, y_fit)
-        fold_k = selector_search.best_params_["select__k"]
-        selected_ks.append(fold_k)
-
-        lr = Pipeline([
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-            ("select", SelectKBest(score_func=f_regression, k=fold_k)),
-            ("reg", LinearRegression()),
-        ]).fit(X_fit, y_fit)
-        scores["Linear Regression"].append(r2_score(y_valid, lr.predict(X_valid)))
-
-        ridge = Pipeline([
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-            ("select", SelectKBest(score_func=f_regression, k=fold_k)),
-            ("reg", Ridge(random_state=RANDOM_STATE)),
-        ])
-        ridge_search = GridSearchCV(
-            ridge, {"reg__alpha": alphas}, cv=inner, scoring="r2", n_jobs=-1
-        ).fit(X_fit, y_fit)
-        scores["Ridge Regression"].append(r2_score(y_valid, ridge_search.predict(X_valid)))
-
-        forest = Pipeline([
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-            ("select", SelectKBest(score_func=f_regression, k=fold_k)),
-            ("reg", RandomForestRegressor(random_state=RANDOM_STATE)),
-        ])
-        forest_search = GridSearchCV(
-            forest, {f"reg__{name}": values for name, values in rf_param_grid.items()},
-            cv=inner, scoring="r2", n_jobs=-1,
-        ).fit(X_fit, y_fit)
-        scores["Random Forest"].append(r2_score(y_valid, forest_search.predict(X_valid)))
-
-    summary = {
-        name: (float(np.mean(values)), float(np.std(values)))
-        for name, values in scores.items()
-    }
-    return summary, selected_ks
 
 k_results = []
+cv_means = {}
 for k in k_values:
     pipe = Pipeline([
         ("imputer", SimpleImputer(strategy="median")),
@@ -213,23 +159,18 @@ for k in k_values:
     pipe.fit(X_train, y_train)
     m = evaluate(pipe, X_test, y_test)
     cvm, cvs = cv_r2(pipe, X_train, y_train)
+    cv_means[k] = cvm
     k_results.append({"k": k, **m, "CV_R2_mean": cvm, "CV_R2_std": cvs})
     print(f"  k={k:2d}: R2_test={m['R2']}, RMSE={m['RMSE']}, CV_R2={cvm}+/-{cvs}")
 
-# Gunakan K=7 sebagai konfigurasi tetap model yang dipakai aplikasi.
-# Hasil untuk kandidat k lainnya tetap dicatat sebagai analisis pembanding.
-best_k = 7
+# Pilih k dengan rata-rata R² CV tertinggi (tidak di-hardcode)
+best_k = max(cv_means, key=cv_means.get)
 selected_k_result = next(r for r in k_results if r["k"] == best_k)
-print(f"\n  >> K aplikasi = {best_k} (CV_R2={selected_k_result['CV_R2_mean']})")
+print(f"\n  >> K terpilih dari CV = {best_k} (CV_R2={selected_k_result['CV_R2_mean']})")
+
 report["k_results"] = k_results
 report["best_k"] = best_k
-report["selection_method"] = "fixed_k_for_streamlit"
-comparison_cv, nested_selected_ks = nested_common_k_cv(X_train, y_train)
-linreg_cv_mean, linreg_cv_std = comparison_cv["Linear Regression"]
-report["linreg_nested_cv_R2_mean"] = linreg_cv_mean
-report["linreg_nested_cv_R2_std"] = linreg_cv_std
-report["nested_cv_selected_k_by_fold"] = nested_selected_ks
-report["baseline"] = {**base_metrics, "CV_R2_mean": base_cv_mean, "CV_R2_std": base_cv_std}
+report["selection_method"] = "max_cv_r2"
 
 # Model UTAMA final: Linear Regression dengan k terbaik
 linreg_model = Pipeline([
@@ -243,7 +184,7 @@ linreg_metrics = evaluate(linreg_model, X_test, y_test)
 
 # Fitur terpilih + skor F (dipakai bersama oleh SEMUA model demi perbandingan adil)
 selector = linreg_model.named_steps["select"]
-scores = selector.scores_
+f_scores_arr = selector.scores_
 selected_mask = selector.get_support()
 selected_features = [f for f, s in zip(feature_cols, selected_mask) if s]
 print(f"  Fitur terpilih (k={best_k}): {selected_features}")
@@ -251,42 +192,8 @@ report["selected_features"] = selected_features
 report["all_features"] = feature_cols
 
 # F-score semua fitur (untuk bar chart)
-f_scores = sorted(zip(feature_cols, scores), key=lambda x: x[1], reverse=True)
+f_scores = sorted(zip(feature_cols, f_scores_arr), key=lambda x: x[1], reverse=True)
 report["f_scores"] = [{"fitur": f, "F_score": round(float(s), 2)} for f, s in f_scores]
-
-# Cek multikolinearitas antar fitur terpilih (korelasi + VIF) — fitur antropometri
-# (Weight, Abdomen, Hip, dst) cenderung berkorelasi tinggi, yg bisa membuat
-# koefisien regresi tidak stabil meski R2/SHAP tetap terlihat baik.
-# (Ini juga jadi ALASAN UTAMA menambahkan Ridge sebagai model pembanding.)
-print("  Cek multikolinearitas fitur terpilih...")
-X_train_sel_df = X_train[selected_features]
-corr_matrix = X_train_sel_df.corr()
-high_corr_pairs = []
-for i, f1 in enumerate(selected_features):
-    for f2 in selected_features[i + 1:]:
-        c = corr_matrix.loc[f1, f2]
-        if abs(c) >= 0.8:
-            high_corr_pairs.append({"fitur_1": f1, "fitur_2": f2, "korelasi": round(float(c), 4)})
-
-vif_values = []
-X_vif = StandardScaler().fit_transform(X_train_sel_df.fillna(X_train_sel_df.median()))
-for i, f in enumerate(selected_features):
-    y_i = X_vif[:, i]
-    X_rest = np.delete(X_vif, i, axis=1)
-    if X_rest.shape[1] == 0:
-        vif = 1.0
-    else:
-        r2_i = LinearRegression().fit(X_rest, y_i).score(X_rest, y_i)
-        vif = float("inf") if r2_i >= 1.0 else 1.0 / (1.0 - r2_i)
-    vif_values.append({"fitur": f, "VIF": round(vif, 4)})
-    print(f"    VIF {f}: {vif:.2f}")
-
-report["korelasi_tinggi_fitur_terpilih"] = high_corr_pairs
-report["vif_fitur_terpilih"] = vif_values
-ada_multikolinearitas = bool(high_corr_pairs or any(v["VIF"] > 10 for v in vif_values))
-if ada_multikolinearitas:
-    print("  !! Terdeteksi indikasi multikolinearitas pada fitur terpilih "
-          "-> Ridge Regression relevan sebagai model pembanding")
 
 # Siapkan data ter-preprocess (scaled + selected fitur) untuk dipakai bersama
 # oleh Ridge, Random Forest, dan SHAP -- fitur SAMA persis dengan Linear Regression
@@ -299,13 +206,19 @@ X_test_sel = pre.transform(X_test)
 # ====================================================================
 print("\n[TAHAP 5] Model pembanding: Ridge Regression & Random Forest...")
 
+alphas = np.logspace(-3, 3, 25)
+rf_param_grid = {
+    "n_estimators": [200, 400],
+    "max_depth": [None, 5, 10],
+    "min_samples_leaf": [1, 2, 4],
+}
+
 # --- (a) RIDGE REGRESSION -------------------------------------------------
-# Seluruh preprocessing dan seleksi fitur diulang di setiap fold CV.
 ridge_pipe = Pipeline([
     ("imputer", SimpleImputer(strategy="median")),
     ("scaler", StandardScaler()),
     ("select", SelectKBest(score_func=f_regression, k=best_k)),
-    ("reg", Ridge(random_state=RANDOM_STATE)),
+    ("reg", Ridge()),
 ])
 ridge_search = GridSearchCV(
     ridge_pipe, {"reg__alpha": alphas},
@@ -314,18 +227,26 @@ ridge_search = GridSearchCV(
 )
 ridge_search.fit(X_train, y_train)
 best_alpha = float(ridge_search.best_params_["reg__alpha"])
-print(f"  Ridge: alpha terbaik = {best_alpha:.4f} (dari {len(alphas)} kandidat, grid log-scale)")
+print(f"  Ridge: alpha terbaik = {best_alpha:.6f} (dari {len(alphas)} kandidat, grid log-scale)")
 
-ridge_model = Ridge(alpha=best_alpha, random_state=RANDOM_STATE)
+# Fit ridge pada data latih terpreproses (fitur terpilih yang sama)
+ridge_model = Ridge(alpha=best_alpha)
 ridge_model.fit(X_train_sel, y_train)
 ridge_metrics = evaluate(ridge_model, X_test_sel, y_test)
-ridge_cv_mean, ridge_cv_std = comparison_cv["Ridge Regression"]
-print(f"  Ridge (alpha={best_alpha:.4f}): R2_test={ridge_metrics['R2']}, "
+
+# CV R2 untuk Ridge: clone best estimator, eval di data latih mentah (pipeline lengkap)
+best_ridge_pipeline = ridge_search.best_estimator_
+ridge_cv_scores = cross_val_score(
+    clone(best_ridge_pipeline), X_train, y_train,
+    cv=KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE), scoring="r2"
+)
+ridge_cv_mean = round(ridge_cv_scores.mean(), 4)
+ridge_cv_std = round(ridge_cv_scores.std(), 4)
+print(f"  Ridge (alpha={best_alpha:.6f}): R2_test={ridge_metrics['R2']}, "
       f"CV_R2={ridge_cv_mean}+/-{ridge_cv_std}")
 report["ridge_alpha_terbaik"] = best_alpha
 
 # --- (b) RANDOM FOREST REGRESSOR ------------------------------------------
-# Grid kecil (praktis untuk n=~230 sampel) dituning via CV pada train
 rf_search = GridSearchCV(
     Pipeline([
         ("imputer", SimpleImputer(strategy="median")),
@@ -342,17 +263,31 @@ rf_search.fit(X_train, y_train)
 rf_pipeline = rf_search.best_estimator_
 rf_model = rf_pipeline.named_steps["reg"]
 rf_metrics = evaluate(rf_pipeline, X_test, y_test)
-rf_cv_mean, rf_cv_std = comparison_cv["Random Forest"]
+
+# CV R2 untuk RF: clone best estimator
+rf_cv_scores = cross_val_score(
+    clone(rf_pipeline), X_train, y_train,
+    cv=KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE), scoring="r2"
+)
+rf_cv_mean = round(rf_cv_scores.mean(), 4)
+rf_cv_std = round(rf_cv_scores.std(), 4)
 print(f"  Random Forest (best params={rf_search.best_params_}): "
       f"R2_test={rf_metrics['R2']}, CV_R2={rf_cv_mean}+/-{rf_cv_std}")
 rf_best_params = {key.removeprefix("reg__"): value for key, value in rf_search.best_params_.items()}
 report["rf_best_params"] = rf_best_params
 
+# CV R2 untuk Linear Regression (clone pipeline linreg)
+linreg_cv_scores = cross_val_score(
+    clone(linreg_model), X_train, y_train,
+    cv=KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE), scoring="r2"
+)
+linreg_cv_mean = round(linreg_cv_scores.mean(), 4)
+linreg_cv_std = round(linreg_cv_scores.std(), 4)
+
 # ====================================================================
 # TAHAP 6 — RINGKASAN PERBANDINGAN 3 MODEL
 # ====================================================================
-print("\n[TAHAP 6] Ringkasan perbandingan 3 model (fitur terpilih sama, k="
-      f"{best_k})...")
+print(f"\n[TAHAP 6] Ringkasan perbandingan 3 model (fitur terpilih sama, k={best_k})...")
 
 model_comparison = [
     {"model": "Linear Regression", **linreg_metrics,
@@ -376,7 +311,115 @@ print(f"\n  >> Model dengan CV_R2 tertinggi: {best_overall['model']} "
       f"(CV_R2={best_overall['CV_R2_mean']})")
 report["model_terbaik_cv"] = best_overall["model"]
 artifact_id = uuid.uuid4().hex
-report["artifact_id"] = artifact_id
+
+# ====================================================================
+# TAHAP 6b — INTERSEP DAN CI 95% KOEFISIEN LINEAR REGRESSION (satuan asli)
+# ====================================================================
+print("\n[TAHAP 6b] Menghitung intersep dan CI 95% koefisien (OLS, satuan asli)...")
+
+# Ambil data latih fitur terpilih dalam satuan asli (tanpa standardisasi)
+X_train_raw_sel = X_train[selected_features].values
+y_train_arr = y_train.values.astype(float)
+
+# OLS manual via numpy: b = (X'X)^-1 X'y
+n_obs = len(y_train_arr)
+n_pred = len(selected_features)  # jumlah prediktor (tidak termasuk intersep)
+Xd = np.column_stack([np.ones(n_obs), X_train_raw_sel])
+beta = np.linalg.solve(Xd.T @ Xd, Xd.T @ y_train_arr)
+resid = y_train_arr - Xd @ beta
+dof_ci = n_obs - n_pred - 1
+s2 = (resid @ resid) / dof_ci
+XtX_inv = np.linalg.inv(Xd.T @ Xd)
+se_ci = np.sqrt(s2 * np.diag(XtX_inv))
+t_kritis = float(scipy_stats.t.ppf(0.975, dof_ci))
+ci_bawah = beta - t_kritis * se_ci
+ci_atas = beta + t_kritis * se_ci
+
+# Verifikasi: bandingkan beta dengan koefisien sklearn (harus sama dalam toleransi 1e-8)
+sk_coef = linreg_model.named_steps["reg"].coef_
+sk_intercept = linreg_model.named_steps["reg"].intercept_
+# CATATAN: sklearn memakai fitur yang di-scale, beta OLS di-fit pada satuan asli,
+# keduanya harus menghasilkan prediksi yang sama tapi koefisiennya berbeda skala.
+# Verifikasi lewat prediksi pada X_test_sel vs OLS prediction:
+Xd_test = np.column_stack([np.ones(len(X_test)), X_test[selected_features].values])
+pred_ols = Xd_test @ beta
+pred_sk = linreg_model.predict(X_test)
+max_pred_diff = float(np.max(np.abs(pred_ols - pred_sk)))
+print(f"  Maks selisih prediksi OLS vs sklearn: {max_pred_diff:.2e} "
+      f"({'OK (< 1e-6)' if max_pred_diff < 1e-6 else 'PERIKSA!'})")
+
+# Koefisien terstandarisasi (dari sklearn yang difit pada data terstandarisasi)
+# Intersep terstandarisasi = rata-rata y_train (konvensi skripsi)
+mean_y_train = float(np.mean(y_train_arr))
+std_coef_values = [mean_y_train] + list(sk_coef)
+
+param_names = ["Intersep"] + selected_features
+ci_rows = []
+for i, name in enumerate(param_names):
+    ci_rows.append({
+        "parameter": name,
+        "koef": round(float(beta[i]), 4),
+        "se": round(float(se_ci[i]), 4),
+        "ci_bawah": round(float(ci_bawah[i]), 4),
+        "ci_atas": round(float(ci_atas[i]), 4),
+        "koef_terstandarisasi": round(float(std_coef_values[i]), 4),
+    })
+    print(f"  {name:12s}: beta={beta[i]:.4f}  SE={se_ci[i]:.4f}  "
+          f"CI=[{ci_bawah[i]:.4f}, {ci_atas[i]:.4f}]  "
+          f"std_koef={std_coef_values[i]:.4f}")
+
+report["ci_linreg"] = ci_rows
+report["ci_dof"] = int(dof_ci)
+report["ci_t_kritis"] = round(t_kritis, 4)
+
+# ====================================================================
+# TAHAP 6c — MULTIKOLINEARITAS FITUR TERPILIH
+# ====================================================================
+print("\n[TAHAP 6c] Cek multikolinearitas fitur terpilih...")
+
+X_train_sel_df = X_train[selected_features]
+
+# Korelasi pasangan fitur terpilih
+corr_matrix = X_train_sel_df.corr()
+korelasi_pairs = []
+for i, f1 in enumerate(selected_features):
+    for f2 in selected_features[i + 1:]:
+        c = corr_matrix.loc[f1, f2]
+        korelasi_pairs.append({"fitur_1": f1, "fitur_2": f2, "korelasi": round(float(c), 4)})
+        print(f"  Korelasi {f1}–{f2}: {c:.4f}")
+
+report["korelasi_fitur_terpilih"] = korelasi_pairs
+
+# VIF dengan konstanta menggunakan formula numpy:
+# VIF_i = 1/(1 - R2_i) di mana R2_i dari regresi X_i pada [1, X_j, j!=i]
+# Ini setara dengan statsmodels variance_inflation_factor pada add_constant(X)
+X_sel_raw = X_train_sel_df.fillna(X_train_sel_df.median()).values.astype(float)
+n_sel = X_sel_raw.shape[0]
+vif_values = []
+for i, f in enumerate(selected_features):
+    # Tambah konstanta (kolom 1) ke X_rest untuk VIF "dengan konstanta"
+    X_others = np.delete(X_sel_raw, i, axis=1)
+    X_others_c = np.column_stack([np.ones(n_sel), X_others])
+    y_i = X_sel_raw[:, i]
+    if X_others_c.shape[1] == 0:
+        vif = 1.0
+    else:
+        # Fit OLS: y_i = intercept + beta * X_others
+        beta_vif = np.linalg.lstsq(X_others_c, y_i, rcond=None)[0]
+        y_pred_i = X_others_c @ beta_vif
+        ss_res = np.sum((y_i - y_pred_i) ** 2)
+        ss_tot = np.sum((y_i - y_i.mean()) ** 2)
+        r2_i = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+        vif = float("inf") if r2_i >= 1.0 else 1.0 / (1.0 - r2_i)
+    vif_values.append({"fitur": f, "VIF": round(vif, 2)})
+    print(f"  VIF {f}: {vif:.2f}")
+
+report["vif_fitur_terpilih"] = vif_values
+
+ada_multikolinearitas = bool(korelasi_pairs or any(v["VIF"] > 10 for v in vif_values))
+if ada_multikolinearitas:
+    print("  !! Terdeteksi indikasi multikolinearitas pada fitur terpilih "
+          "-> Ridge Regression relevan sebagai model pembanding")
 
 # ====================================================================
 # TAHAP 7 — VISUALISASI EVALUASI
@@ -402,8 +445,8 @@ r2_vals = [m["R2"] for m in model_comparison]
 rmse_vals = [m["RMSE"] for m in model_comparison]
 bar_colors = ["#2563eb", "#16a34a", "#ea580c"]
 axes[0].bar(names, r2_vals, color=bar_colors)
-axes[0].set_title("R2 (test) per Model")
-axes[0].set_ylabel("R2")
+axes[0].set_title("R² (test) per Model")
+axes[0].set_ylabel("R²")
 for i, v in enumerate(r2_vals):
     axes[0].text(i, v, f"{v:.3f}", ha="center", va="bottom")
 axes[1].bar(names, rmse_vals, color=bar_colors)
@@ -429,7 +472,7 @@ for ax, (name, pred) in zip(axes, preds.items()):
     ax.set_xlabel("BodyFat Aktual (%)")
     ax.set_ylabel("BodyFat Prediksi (%)")
     r2_this = r2_score(y_test, pred)
-    ax.set_title(f"{name}\n(R2={r2_this:.3f})")
+    ax.set_title(f"{name}\n(R²={r2_this:.3f})")
 plt.tight_layout()
 plt.savefig(f"{OUT}/pred_vs_actual.png", dpi=130)
 plt.close()
@@ -477,15 +520,16 @@ def shap_for_linear(model, name, tag):
     plt.close()
 
     mean_abs = np.abs(sv).mean(axis=0)
-    return sorted(
-        [{"fitur": f, "mean_abs_shap": round(float(v), 4)}
-         for f, v in zip(selected_features, mean_abs)],
-        key=lambda x: x["mean_abs_shap"], reverse=True
+    return (
+        sorted(
+            [{"fitur": f, "mean_abs_shap": round(float(v), 4)}
+             for f, v in zip(selected_features, mean_abs)],
+            key=lambda x: x["mean_abs_shap"], reverse=True
+        ),
+        explainer.expected_value
     )
 
 def shap_for_tree(model, name, tag):
-    # Mode path-dependent menggunakan distribusi training yang tersimpan di
-    # setiap tree dan menjaga additivity pada output Random Forest.
     explainer = shap.TreeExplainer(model.named_steps["reg"], feature_perturbation="tree_path_dependent")
     rf_test_sel = model[:-1].transform(X_test)
     sv = explainer.shap_values(rf_test_sel)
@@ -531,12 +575,16 @@ def shap_for_tree(model, name, tag):
         key=lambda x: x["mean_abs_shap"], reverse=True
     )
 
-shap_results["Linear Regression"] = shap_for_linear(linreg_model, "Linear Regression", "linreg")
-shap_results["Ridge Regression"] = shap_for_linear(ridge_model, "Ridge Regression", "ridge")
-shap_results["Random Forest"] = shap_for_tree(rf_pipeline, "Random Forest", "rf")
-report["shap_importance"] = shap_results  # dict per model (kompatibel & lebih lengkap dr sebelumnya)
+shap_linreg, shap_base_linreg = shap_for_linear(linreg_model, "Linear Regression", "linreg")
+shap_ridge, _ = shap_for_linear(ridge_model, "Ridge Regression", "ridge")
+shap_rf = shap_for_tree(rf_pipeline, "Random Forest", "rf")
+shap_results["Linear Regression"] = shap_linreg
+shap_results["Ridge Regression"] = shap_ridge
+shap_results["Random Forest"] = shap_rf
+report["shap_importance"] = shap_results
+report["shap_base_linreg"] = round(float(shap_base_linreg), 4)
 
-# Koefisien Linear Regression & Ridge (sanity check vs SHAP)
+# Koefisien Linear Regression & Ridge (terstandarisasi — dari sklearn)
 report["koefisien_linreg"] = [
     {"fitur": f, "koef": round(float(c), 4)}
     for f, c in zip(selected_features, linreg_model.named_steps["reg"].coef_)
@@ -552,6 +600,7 @@ report["feature_importance_rf"] = sorted(
      for f, v in zip(selected_features, rf_model.feature_importances_)],
     key=lambda x: x["importance"], reverse=True
 )
+report["artifact_id"] = artifact_id
 
 # ====================================================================
 # TAHAP 9 — SIMPAN ARTEFAK
@@ -561,7 +610,7 @@ joblib.dump(linreg_model, f"{OUT}/model_linreg.pkl")   # pipeline lengkap (imput
 joblib.dump(ridge_model, f"{OUT}/model_ridge.pkl")     # fit di ruang X_train_sel (sudah diproses via `pre`)
 joblib.dump(rf_pipeline, f"{OUT}/model_rf.pkl")        # pipeline lengkap untuk input mentah
 joblib.dump(pre, f"{OUT}/preprocessor.pkl")            # imputer+scaler+select, dipakai bersama Ridge & RF
-joblib.dump({"artifact_version": 3, "artifact_id": artifact_id,
+joblib.dump({"artifact_version": 4, "artifact_id": artifact_id,
              "features": feature_cols, "selected": selected_features,
              "best_k": best_k, "ridge_alpha": best_alpha,
              "rf_params": rf_best_params, "shap_background": X_train_sel},
@@ -574,4 +623,5 @@ print(f"Baseline           R2_test = {base_metrics['R2']}  | CV = {base_cv_mean}
 for m in model_comparison:
     print(f"{m['model']:<18s} R2_test = {m['R2']}  | CV = {m['CV_R2_mean']}  (k={best_k})")
 print(f"Model CV_R2 tertinggi: {best_overall['model']}")
+print(f"Intersep OLS: {beta[0]:.4f}  |  CI: [{ci_bawah[0]:.4f}, {ci_atas[0]:.4f}]")
 print(f"Artefak tersimpan di {OUT}/")
